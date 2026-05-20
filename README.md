@@ -511,9 +511,3 @@ Check the logs: `docker compose logs weka-api`. If you see `Address already in u
 ## Weka version
 
 Builds against the stable `weka-dev` release (`3.9.6`) from Maven Central. The spec preferred `3.9.7-SNAPSHOT` but allows the documented downgrade when the snapshot is unavailable; flip `<weka.version>` in `api/pom.xml` if you want the snapshot.
-
----
-
-## Security note
-
-There is **no authentication**. Compose binds to `127.0.0.1` only. Do **not** expose this to a network without adding auth first.
