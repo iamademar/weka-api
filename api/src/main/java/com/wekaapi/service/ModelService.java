@@ -3,6 +3,7 @@ package com.wekaapi.service;
 import com.wekaapi.config.Config;
 import com.wekaapi.error.ApiException;
 import weka.classifiers.Classifier;
+import weka.core.Drawable;
 import weka.core.Instances;
 import weka.core.SerializationHelper;
 
@@ -102,6 +103,64 @@ public class ModelService {
                 "algorithm", m.classifier().getClass().getName(),
                 "summary", m.classifier().toString()
         );
+    }
+
+    public Map<String, Object> drawableType(String name) {
+        LoadedModel m = load(name);
+        return Map.of(
+                "name", name,
+                "type", drawableTypeOf(m.classifier())
+        );
+    }
+
+    public Map<String, Object> graph(String name, String expectedType) {
+        LoadedModel m = load(name);
+        Classifier classifier = m.classifier();
+        if (!(classifier instanceof Drawable d)) {
+            throw new ApiException(400, "NOT_DRAWABLE",
+                    classifier.getClass().getName() + " does not implement Drawable");
+        }
+        String actual = drawableTypeOf(classifier);
+        if (expectedType != null && !expectedType.equalsIgnoreCase(actual)) {
+            throw new ApiException(400, "NOT_DRAWABLE",
+                    "classifier graph type is '" + actual + "', not '" + expectedType + "'");
+        }
+        String graph;
+        try {
+            graph = d.graph();
+        } catch (Exception e) {
+            throw new ApiException(400, "NOT_DRAWABLE",
+                    "failed to draw classifier: " + e.getMessage());
+        }
+        return Map.of(
+                "name", name,
+                "type", actual,
+                "format", graphFormat(actual),
+                "graph", graph
+        );
+    }
+
+    private static String drawableTypeOf(Classifier classifier) {
+        if (!(classifier instanceof Drawable d)) return "none";
+        try {
+            int t = d.graphType();
+            return switch (t) {
+                case Drawable.TREE -> "tree";
+                case Drawable.BayesNet -> "graph";
+                case Drawable.Newick -> "newick";
+                default -> "none";
+            };
+        } catch (Exception e) {
+            return "none";
+        }
+    }
+
+    private static String graphFormat(String type) {
+        return switch (type) {
+            case "tree", "graph" -> "dot";
+            case "newick" -> "newick";
+            default -> "unknown";
+        };
     }
 
     public void delete(String name) {

@@ -60,8 +60,9 @@ public class EvaluateIT {
                     .post(RequestBody.create(evalJson, MediaType.parse("application/json")))
                     .build();
             try (Response r = client.getOkHttp().newCall(eval).execute()) {
-                assertEquals(200, r.code(), r.body().string());
-                JsonNode body2 = MAPPER.readTree(r.body().string());
+                String text = r.body().string();
+                assertEquals(200, r.code(), text);
+                JsonNode body2 = MAPPER.readTree(text);
                 double accuracy = body2.get("accuracy").asDouble();
                 assertTrue(accuracy > 0.9, "expected accuracy > 0.9, got " + accuracy);
                 assertEquals(150, body2.get("numInstances").asInt());

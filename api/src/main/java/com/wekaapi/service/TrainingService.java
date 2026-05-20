@@ -1,11 +1,18 @@
 package com.wekaapi.service;
 
+import com.wekaapi.dto.FilterSpec;
 import com.wekaapi.dto.TrainRequest;
 import com.wekaapi.error.ApiException;
 import weka.classifiers.AbstractClassifier;
 import weka.classifiers.Classifier;
+import weka.classifiers.meta.FilteredClassifier;
 import weka.core.Instances;
+import weka.filters.Filter;
+import weka.filters.MultiFilter;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class TrainingService {
@@ -49,9 +56,9 @@ public class TrainingService {
 
         String[] options = (req.options == null) ? new String[0] : req.options.toArray(new String[0]);
 
-        Classifier classifier;
+        Classifier baseClassifier;
         try {
-            classifier = AbstractClassifier.forName(req.algorithm, options);
+            baseClassifier = AbstractClassifier.forName(req.algorithm, options);
         } catch (Exception e) {
             throw new ApiException(400, "INVALID_ALGORITHM",
                     "failed to instantiate classifier: " + e.getMessage(), e);
@@ -66,6 +73,12 @@ public class TrainingService {
         }
         data.setClassIndex(classIndex);
 
+        Classifier classifier = baseClassifier;
+        List<String> appliedFilters = new ArrayList<>();
+        if (req.filters != null && !req.filters.isEmpty()) {
+            classifier = wrapWithFilters(baseClassifier, req.filters, appliedFilters);
+        }
+
         long start = System.currentTimeMillis();
         try {
             classifier.buildClassifier(data);
@@ -77,12 +90,36 @@ public class TrainingService {
 
         modelService.save(req.modelName, classifier, data);
 
-        return Map.of(
-                "modelName", req.modelName,
-                "algorithm", req.algorithm,
-                "trainedOn", req.dataset,
-                "trainingTimeMs", elapsed,
-                "summary", classifier.toString()
-        );
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("modelName", req.modelName);
+        response.put("algorithm", req.algorithm);
+        response.put("trainedOn", req.dataset);
+        response.put("trainingTimeMs", elapsed);
+        response.put("summary", classifier.toString());
+        if (!appliedFilters.isEmpty()) {
+            response.put("filters", appliedFilters);
+        }
+        return response;
+    }
+
+    private static Classifier wrapWithFilters(Classifier base, List<FilterSpec> specs, List<String> applied) {
+        Filter filter;
+        if (specs.size() == 1) {
+            filter = TransformService.buildFilter(specs.get(0));
+            applied.add(specs.get(0).filter);
+        } else {
+            Filter[] chain = new Filter[specs.size()];
+            for (int i = 0; i < specs.size(); i++) {
+                chain[i] = TransformService.buildFilter(specs.get(i));
+                applied.add(specs.get(i).filter);
+            }
+            MultiFilter mf = new MultiFilter();
+            mf.setFilters(chain);
+            filter = mf;
+        }
+        FilteredClassifier fc = new FilteredClassifier();
+        fc.setFilter(filter);
+        fc.setClassifier(base);
+        return fc;
     }
 }

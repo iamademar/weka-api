@@ -55,8 +55,9 @@ public class TrainAndPredictIT {
                     .post(RequestBody.create(trainBody, MediaType.parse("application/json")))
                     .build();
             try (Response train = client.getOkHttp().newCall(trainReq).execute()) {
-                assertEquals(201, train.code(), "train failed: " + train.body().string());
-                JsonNode tj = MAPPER.readTree(train.body().string());
+                String text = train.body().string();
+                assertEquals(201, train.code(), "train failed: " + text);
+                JsonNode tj = MAPPER.readTree(text);
                 assertEquals("iris-j48", tj.get("modelName").asText());
             }
 

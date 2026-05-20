@@ -23,18 +23,24 @@ public class AlgorithmController {
     }
 
     private static Map<String, List<String>> discover() {
-        List<String> classes;
-        try {
-            @SuppressWarnings("unchecked")
-            List<String> found = ClassDiscovery.find(Classifier.class.getName(), "weka.classifiers");
-            classes = found;
-        } catch (Throwable t) {
-            classes = Collections.emptyList();
+        java.util.LinkedHashSet<String> classes = new java.util.LinkedHashSet<>();
+        for (String pkg : new String[]{
+                "weka.classifiers",
+                "weka.classifiers.trees",
+                "weka.classifiers.bayes",
+                "weka.classifiers.functions",
+                "weka.classifiers.lazy",
+                "weka.classifiers.rules",
+                "weka.classifiers.meta",
+                "weka.classifiers.misc"
+        }) {
+            try {
+                @SuppressWarnings("unchecked")
+                List<String> found = ClassDiscovery.find(Classifier.class.getName(), pkg);
+                if (found != null) classes.addAll(found);
+            } catch (Throwable ignored) {}
         }
-
-        if (classes == null || classes.isEmpty()) {
-            classes = fallbackClassifiers();
-        }
+        classes.addAll(fallbackClassifiers());
 
         Map<String, List<String>> grouped = new TreeMap<>();
         for (String fqn : classes) {
