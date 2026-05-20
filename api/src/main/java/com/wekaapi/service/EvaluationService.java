@@ -7,10 +7,13 @@ import weka.core.Attribute;
 import weka.core.Instances;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 public class EvaluationService {
+
+    public record EvaluationResult(Evaluation evaluation, ModelService.LoadedModel loaded, Instances test) {}
 
     private final DatasetService datasetService;
     private final ModelService modelService;
@@ -27,32 +30,38 @@ public class EvaluationService {
         if (req.dataset == null || req.dataset.isBlank()) {
             throw new ApiException(400, "BAD_REQUEST", "dataset is required");
         }
+        EvaluationResult result = runEvaluation(req.model, req.dataset);
+        return summarize(result, req.model, req.dataset);
+    }
 
-        ModelService.LoadedModel loaded = modelService.load(req.model);
-        Instances test = datasetService.load(req.dataset);
+    public EvaluationResult runEvaluation(String modelName, String datasetName) {
+        ModelService.LoadedModel loaded = modelService.load(modelName);
+        Instances test = datasetService.load(datasetName);
         test.setClassIndex(loaded.header().classIndex());
-
-        Evaluation eval;
         try {
-            eval = new Evaluation(loaded.header());
+            Evaluation eval = new Evaluation(loaded.header());
             eval.evaluateModel(loaded.classifier(), test);
+            return new EvaluationResult(eval, loaded, test);
         } catch (Exception e) {
             throw new ApiException(422, "EVALUATION_FAILED",
                     "evaluation failed: " + e.getMessage(), e);
         }
+    }
 
-        Attribute classAttr = loaded.header().classAttribute();
-        Map<String, Object> result = new java.util.LinkedHashMap<>();
-        result.put("model", req.model);
-        result.put("dataset", req.dataset);
-        result.put("numInstances", (int) eval.numInstances());
-        result.put("correct", (int) eval.correct());
-        result.put("incorrect", (int) eval.incorrect());
-        result.put("accuracy", round(eval.pctCorrect() / 100.0));
+    public Map<String, Object> summarize(EvaluationResult r, String modelName, String datasetName) {
+        Evaluation eval = r.evaluation();
+        Attribute classAttr = r.loaded().header().classAttribute();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("model", modelName);
+        out.put("dataset", datasetName);
+        out.put("numInstances", (int) eval.numInstances());
+        out.put("correct", (int) eval.correct());
+        out.put("incorrect", (int) eval.incorrect());
+        out.put("accuracy", round(eval.pctCorrect() / 100.0));
 
         if (classAttr.isNominal()) {
-            result.put("kappa", round(eval.kappa()));
-            result.put("weightedFMeasure", round(eval.weightedFMeasure()));
+            out.put("kappa", round(eval.kappa()));
+            out.put("weightedFMeasure", round(eval.weightedFMeasure()));
             try {
                 double[][] matrix = eval.confusionMatrix();
                 int[][] intMatrix = new int[matrix.length][];
@@ -62,18 +71,18 @@ public class EvaluationService {
                         intMatrix[i][j] = (int) Math.round(matrix[i][j]);
                     }
                 }
-                result.put("confusionMatrix", intMatrix);
+                out.put("confusionMatrix", intMatrix);
             } catch (Exception ignored) {}
             List<String> labels = new ArrayList<>(classAttr.numValues());
             for (int i = 0; i < classAttr.numValues(); i++) labels.add(classAttr.value(i));
-            result.put("classLabels", labels);
+            out.put("classLabels", labels);
         }
 
         try {
-            result.put("summary", eval.toSummaryString());
+            out.put("summary", eval.toSummaryString());
         } catch (Exception ignored) {}
 
-        return result;
+        return out;
     }
 
     private static double round(double v) {

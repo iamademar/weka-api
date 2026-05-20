@@ -28,4 +28,16 @@ public class ModelController {
         service.delete(name);
         ctx.status(HttpStatus.NO_CONTENT);
     }
+
+    public void drawableType(Context ctx) {
+        ctx.json(service.drawableType(ctx.pathParam("name")));
+    }
+
+    public void tree(Context ctx) {
+        ctx.json(service.graph(ctx.pathParam("name"), "tree"));
+    }
+
+    public void graph(Context ctx) {
+        ctx.json(service.graph(ctx.pathParam("name"), "graph"));
+    }
 }
