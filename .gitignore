@@ -1,0 +1,15 @@
+# Weka REST API
+api/target/
+models/*
+!models/.gitkeep
+data/*
+!data/.gitkeep
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store

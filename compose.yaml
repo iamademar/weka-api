@@ -1,0 +1,25 @@
+services:
+  weka-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: weka-api:dev
+    container_name: weka-api
+    ports:
+      - "127.0.0.1:7070:7070"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      PORT: "7070"
+      MODELS_DIR: /app/models
+      DATA_DIR: /app/data
+      MAX_UPLOAD_MB: "100"
+      LOG_LEVEL: INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7070/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
