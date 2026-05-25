@@ -12,6 +12,7 @@ HTTP API over [Weka](https://www.cs.waikato.ac.nz/ml/weka/) for training and ser
   - [Filters and transform](#filters-and-transform)
   - [Model structure](#model-structure)
   - [Post-training diagnostics](#post-training-diagnostics)
+- [Beyond classification](#beyond-classification)
 - [End-to-end walkthrough](#end-to-end-walkthrough)
 - [Troubleshooting](#troubleshooting)
 - [Security note](#security-note)
@@ -92,7 +93,7 @@ rm -f models/* data/*  # keep the .gitkeep files
 
 ## Running the test suite
 
-The suite uses Javalin's in-process test runner — no running container required — and currently includes **22 tests** covering health, algorithms, security, the train → predict → evaluate flow, EDA, transform (apply + preview), filter metadata, leakage-safe filtered training, model-structure (tree/graph), and the five diagnostics endpoints.
+The suite uses Javalin's in-process test runner — no running container required — and currently includes **48 tests** covering health, algorithms, security, the train → predict → evaluate flow, EDA, transform (apply + preview), filter metadata, leakage-safe filtered training, model-structure (tree/graph), the diagnostics endpoints, and the "beyond classification" features: cross-validation / percentage split, clustering, attribute selection, association rules, the experimenter, batch prediction, cost matrices, regression diagnostics, learning curves, hyperparameter search, incremental updates, and model export/import.
 
 ### Locally (needs JDK 17 + Maven on your machine)
 
@@ -990,10 +991,126 @@ curl -X POST http://localhost:7070/diagnostics/calibration \
 | `INVALID_ATTRIBUTE`   | 400  | Attribute name not on dataset                        |
 | `INVALID_CLASS_VALUE` | 400  | Class value not in the class attribute's domain      |
 | `NOT_DRAWABLE`        | 400  | Classifier doesn't implement Drawable / wrong graph type |
-| `NOT_NOMINAL_CLASS`   | 400  | Diagnostic requires a nominal class but the model's class is numeric |
-| `NOT_NUMERIC_CLASS`   | 400  | Reserved for future numeric-class diagnostics        |
+| `NOT_NOMINAL_CLASS`   | 400  | Diagnostic / cost matrix requires a nominal class but the model's class is numeric |
+| `NOT_NUMERIC_CLASS`   | 400  | Diagnostic requires a numeric class (e.g. `/diagnostics/residuals`) but the class is nominal |
+| `INVALID_EVAL_METHOD` | 400  | `/evaluate` `method` not one of test_set / cross_validation / percentage_split |
+| `WRONG_MODEL_KIND`    | 400  | Operation expected a classifier but the stored model is a clusterer (or vice versa) |
+| `INVALID_CLUSTERER`   | 400  | Clusterer classname outside `weka.clusterers.` allowlist or unknown |
+| `CLUSTERING_FAILED`   | 422  | Weka threw during cluster build / assign / evaluate  |
+| `INVALID_EVALUATOR` / `INVALID_SEARCH` | 400 | Attribute-selection evaluator/search classname invalid |
+| `INCOMPATIBLE_SEARCH` | 400  | Evaluator and search are incompatible (e.g. subset evaluator with Ranker) |
+| `SELECTION_FAILED`    | 422  | Weka threw during attribute selection                |
+| `INVALID_ASSOCIATOR`  | 400  | Associator classname outside `weka.associations.` allowlist |
+| `REQUIRES_NOMINAL`    | 422  | Association mining needs all-nominal data (discretize first) |
+| `ASSOCIATION_FAILED`  | 422  | Weka threw during association mining                 |
+| `HEADER_MISMATCH`     | 422  | `/predict/dataset` dataset schema incompatible with the model |
+| `NOT_UPDATEABLE`      | 422  | `/train/update` model is not an `UpdateableClassifier` |
+| `SEARCH_FAILED`       | 422  | Weka threw during hyperparameter search              |
+| `LEARNING_CURVE_FAILED` | 422 | Weka threw building the learning curve              |
+| `EXPERIMENT_FAILED`   | 422  | Weka threw during the experiment grid                |
+| `INVALID_MODEL_FILE`  | 400  | Uploaded `/models/{name}/import` file isn't a serialized Weka Classifier |
 | `BAD_REQUEST`         | 400  | Malformed JSON or missing required fields            |
 | `INTERNAL_ERROR`      | 500  | Anything uncaught (also logged with full stacktrace) |
+
+---
+
+## Beyond classification
+
+The endpoints above cover the supervised-classification pipeline. The following groups expose the rest of Weka's core panels and a handful of pipeline extensions. All follow the same request/response and error conventions.
+
+### Evaluation modes
+
+`POST /evaluate` accepts an optional `method` to switch how the model is scored:
+
+```bash
+# k-fold cross-validation (re-trains a fresh copy of the model's configuration per fold)
+curl -X POST localhost:7070/evaluate -H 'Content-Type: application/json' \
+  -d '{"model":"iris-j48","dataset":"iris","method":"cross_validation","folds":10,"seed":42}'
+
+# percentage split (shuffle, hold out the test portion)
+curl -X POST localhost:7070/evaluate -H 'Content-Type: application/json' \
+  -d '{"model":"iris-j48","dataset":"iris","method":"percentage_split","trainPercent":66.0}'
+```
+
+> **Note:** `cross_validation` evaluates the *configuration* (algorithm + options) of the saved model — Weka re-trains a fresh copy on each fold — not the already-fitted parameters.
+
+The response now also includes **per-class metrics** (`perClass`: tpRate, fpRate, precision, recall, fMeasure, mcc, rocArea, prcArea) for nominal classes, and **regression metrics** (`rmse`, `mae`, `correlationCoefficient`, …) for numeric classes.
+
+Pass an optional `costMatrix` (square, nominal class only) to get `totalCost` and `avgCost`:
+
+```bash
+curl -X POST localhost:7070/evaluate -H 'Content-Type: application/json' \
+  -d '{"model":"iris-j48","dataset":"iris","costMatrix":[[0,1,2],[1,0,1],[2,1,0]]}'
+```
+
+### Clustering
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/clusterers` | Discover clusterer classnames |
+| `POST` | `/cluster/train` | Build and persist a clusterer (`weka.clusterers.*`) |
+| `POST` | `/cluster/assign` | Assign cluster indices to inline `instances` or a named `dataset` |
+| `POST` | `/cluster/evaluate` | Cluster evaluation; classes-to-clusters when the dataset has a nominal class |
+
+```bash
+curl -X POST localhost:7070/cluster/train -H 'Content-Type: application/json' \
+  -d '{"dataset":"iris","algorithm":"weka.clusterers.SimpleKMeans","options":["-N","3"],"modelName":"iris-km"}'
+curl -X POST localhost:7070/cluster/evaluate -H 'Content-Type: application/json' \
+  -d '{"model":"iris-km","dataset":"iris"}'
+```
+
+By default a nominal class attribute is removed before clustering (`ignoreClass:true`). Clusterers persist alongside classifiers; `GET /models` reports a `kind` (`classifier` / `clusterer`) for each.
+
+### Attribute selection
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/attribute-selection/evaluators` | Discover `ASEvaluation` classes |
+| `GET`  | `/attribute-selection/searches` | Discover `ASSearch` classes |
+| `POST` | `/attribute-selection` | Run evaluator + search, return selected subset and (for Ranker) per-attribute merit |
+
+```bash
+curl -X POST localhost:7070/attribute-selection -H 'Content-Type: application/json' \
+  -d '{"dataset":"iris","evaluator":"weka.attributeSelection.InfoGainAttributeEval","search":"weka.attributeSelection.Ranker"}'
+```
+
+A subset evaluator (e.g. `CfsSubsetEval`) requires a subset search (e.g. `BestFirst`); an attribute evaluator requires `Ranker` — mismatches return `INCOMPATIBLE_SEARCH`.
+
+### Association rules
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/associators` | Discover associator classnames |
+| `POST` | `/associate` | Mine rules (`weka.associations.*`, e.g. Apriori, FPGrowth) |
+
+```bash
+curl -X POST localhost:7070/associate -H 'Content-Type: application/json' \
+  -d '{"dataset":"weather","algorithm":"weka.associations.Apriori"}'
+```
+
+Apriori needs all-nominal attributes — numeric data returns `REQUIRES_NOMINAL`; discretize first via `/transform` (`weka.filters.unsupervised.attribute.Discretize`).
+
+### Experimenter
+
+`POST /experiment` runs a k-fold CV grid over `datasets × algorithms` and flags each algorithm `win`/`loss`/`tie` against a baseline using a corrected resampled paired t-test:
+
+```bash
+curl -X POST localhost:7070/experiment -H 'Content-Type: application/json' \
+  -d '{"datasets":["iris"],"algorithms":[{"algorithm":"weka.classifiers.rules.ZeroR"},{"algorithm":"weka.classifiers.trees.J48"}],"runs":10,"folds":10,"baselineIndex":0}'
+```
+
+### Pipeline extensions
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/predict/dataset` | Batch-score every row of an uploaded dataset (`includeDistribution` optional) |
+| `POST` | `/train/search` | Train with `CVParameterSelection` hyperparameter tuning (`cvParameters`, e.g. `"K 1 10 10"`) |
+| `POST` | `/train/update` | Incrementally update a stored `UpdateableClassifier` with new `instances` |
+| `POST` | `/diagnostics/residuals` | Sampled actual/predicted/residual for numeric-class models |
+| `POST` | `/diagnostics/pr-curve` | Precision-recall curve + `auprc` for a chosen class |
+| `POST` | `/diagnostics/learning-curve` | CV metric vs training-set fraction |
+| `GET`  | `/models/{name}/download` | Download the serialized `.model` file |
+| `POST` | `/models/{name}/import` | Import an externally-trained `.model` (multipart `file` + `dataset` form param for the header) |
 
 ---
 

@@ -33,6 +33,14 @@ public class DiagnosticsController {
         ctx.json(service.calibration(body(ctx)));
     }
 
+    public void residuals(Context ctx) {
+        ctx.json(service.residuals(body(ctx)));
+    }
+
+    public void prCurve(Context ctx) {
+        ctx.json(service.prCurve(body(ctx)));
+    }
+
     private static DiagnosticsRequest body(Context ctx) {
         try {
             return ctx.bodyAsClass(DiagnosticsRequest.class);

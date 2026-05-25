@@ -1,5 +1,6 @@
 package com.wekaapi.service;
 
+import com.wekaapi.dto.PredictDatasetRequest;
 import com.wekaapi.dto.PredictRequest;
 import com.wekaapi.error.ApiException;
 import weka.classifiers.Classifier;
@@ -17,9 +18,11 @@ import java.util.Map;
 public class PredictionService {
 
     private final ModelService modelService;
+    private final DatasetService datasetService;
 
-    public PredictionService(ModelService modelService) {
+    public PredictionService(ModelService modelService, DatasetService datasetService) {
         this.modelService = modelService;
+        this.datasetService = datasetService;
     }
 
     public Map<String, Object> predict(PredictRequest req) {
@@ -67,7 +70,63 @@ public class PredictionService {
         );
     }
 
-    private static Instance buildInstance(Instances header, Map<String, Object> input) {
+    /** Scores every instance in a stored dataset against a model. */
+    public Map<String, Object> predictDataset(PredictDatasetRequest req) {
+        if (req == null || req.model == null || req.model.isBlank()) {
+            throw new ApiException(400, "BAD_REQUEST", "model is required");
+        }
+        if (req.dataset == null || req.dataset.isBlank()) {
+            throw new ApiException(400, "BAD_REQUEST", "dataset is required");
+        }
+        boolean includeDist = req.includeDistribution != null && req.includeDistribution;
+
+        ModelService.LoadedModel loaded = modelService.load(req.model);
+        Classifier classifier = loaded.classifier();
+        Instances header = loaded.header();
+        Attribute classAttr = header.classAttribute();
+        boolean numericClass = classAttr.isNumeric();
+
+        Instances data = datasetService.load(req.dataset);
+        data.setClassIndex(header.classIndex());
+        if (!header.equalHeaders(data)) {
+            throw new ApiException(422, "HEADER_MISMATCH",
+                    "dataset schema is incompatible with the model: " + header.equalHeadersMsg(data));
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>(data.numInstances());
+        for (int i = 0; i < data.numInstances(); i++) {
+            Instance inst = data.instance(i);
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("index", i);
+            try {
+                if (numericClass) {
+                    double pred = classifier.classifyInstance(inst);
+                    entry.put("predictedClass", Utils.isMissingValue(pred) ? null : pred);
+                } else {
+                    double[] dist = classifier.distributionForInstance(inst);
+                    entry.put("predictedClass", classAttr.value(Utils.maxIndex(dist)));
+                    if (includeDist) {
+                        Map<String, Double> distribution = new LinkedHashMap<>();
+                        for (int j = 0; j < dist.length; j++) distribution.put(classAttr.value(j), dist[j]);
+                        entry.put("distribution", distribution);
+                    }
+                }
+            } catch (Exception e) {
+                throw new ApiException(422, "PREDICTION_FAILED",
+                        "prediction failed at row " + i + ": " + e.getMessage(), e);
+            }
+            results.add(entry);
+        }
+
+        return Map.of(
+                "model", req.model,
+                "dataset", req.dataset,
+                "numInstances", data.numInstances(),
+                "predictions", results
+        );
+    }
+
+    static Instance buildInstance(Instances header, Map<String, Object> input) {
         double[] values = new double[header.numAttributes()];
         for (int i = 0; i < header.numAttributes(); i++) {
             Attribute attr = header.attribute(i);
