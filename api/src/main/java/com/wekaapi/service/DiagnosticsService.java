@@ -198,6 +198,68 @@ public class DiagnosticsService {
         return out;
     }
 
+    public Map<String, Object> residuals(DiagnosticsRequest req) {
+        validate(req);
+        EvaluationService.EvaluationResult r = evaluationService.runEvaluation(req.model, req.dataset);
+        Attribute classAttr = r.loaded().header().classAttribute();
+        if (!classAttr.isNumeric()) {
+            throw new ApiException(400, "NOT_NUMERIC_CLASS",
+                    "residuals require a numeric class attribute");
+        }
+
+        List<Prediction> preds = predictionsList(r);
+        int total = preds.size();
+        int sampleSize = SamplingUtil.clampSampleSize(req.sample == null ? SamplingUtil.DEFAULT_SAMPLE : req.sample);
+        long seed = req.seed == null ? SamplingUtil.DEFAULT_SEED : req.seed;
+        int[] indices = SamplingUtil.sampleIndices(total, sampleSize, seed);
+
+        List<Map<String, Object>> points = new ArrayList<>(indices.length);
+        for (int idx : indices) {
+            Prediction p = preds.get(idx);
+            Map<String, Object> point = new LinkedHashMap<>();
+            point.put("index", idx);
+            point.put("actual", p.actual());
+            point.put("predicted", p.predicted());
+            point.put("residual", round(p.actual() - p.predicted()));
+            points.add(point);
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("model", req.model);
+        out.put("dataset", req.dataset);
+        out.put("totalInstances", total);
+        out.put("sampled", points.size());
+        out.put("points", points);
+        return out;
+    }
+
+    public Map<String, Object> prCurve(DiagnosticsRequest req) {
+        validate(req);
+        EvaluationService.EvaluationResult r = evaluationService.runEvaluation(req.model, req.dataset);
+        Attribute classAttr = r.loaded().header().classAttribute();
+        requireNominal(classAttr);
+        int classIndex = resolveClassValueIndex(classAttr, req.classValue);
+
+        ThresholdCurve tc = new ThresholdCurve();
+        Instances curve;
+        try {
+            curve = tc.getCurve(predictionsVector(r), classIndex);
+        } catch (Exception e) {
+            throw new ApiException(422, "EVALUATION_FAILED",
+                    "precision-recall curve failed: " + e.getMessage(), e);
+        }
+        List<Map<String, Object>> points = projectCurve(curve,
+                List.of("Recall", "Precision", "Threshold"));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("model", req.model);
+        out.put("dataset", req.dataset);
+        out.put("classValue", classAttr.value(classIndex));
+        out.put("auprc", round(ThresholdCurve.getPRCArea(curve)));
+        out.put("points", points);
+        return out;
+    }
+
     private static void validate(DiagnosticsRequest req) {
         if (req == null) throw new ApiException(400, "BAD_REQUEST", "missing request body");
         if (req.model == null || req.model.isBlank())

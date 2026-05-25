@@ -1,6 +1,8 @@
 package com.wekaapi.controller;
 
+import com.wekaapi.dto.SearchTrainRequest;
 import com.wekaapi.dto.TrainRequest;
+import com.wekaapi.dto.UpdateRequest;
 import com.wekaapi.error.ApiException;
 import com.wekaapi.service.TrainingService;
 import io.javalin.http.Context;
@@ -22,5 +24,25 @@ public class TrainController {
             throw new ApiException(400, "BAD_REQUEST", "invalid JSON: " + e.getMessage(), e);
         }
         ctx.status(HttpStatus.CREATED).json(service.train(req));
+    }
+
+    public void search(Context ctx) {
+        SearchTrainRequest req;
+        try {
+            req = ctx.bodyAsClass(SearchTrainRequest.class);
+        } catch (Exception e) {
+            throw new ApiException(400, "BAD_REQUEST", "invalid JSON: " + e.getMessage(), e);
+        }
+        ctx.status(HttpStatus.CREATED).json(service.searchTrain(req));
+    }
+
+    public void update(Context ctx) {
+        UpdateRequest req;
+        try {
+            req = ctx.bodyAsClass(UpdateRequest.class);
+        } catch (Exception e) {
+            throw new ApiException(400, "BAD_REQUEST", "invalid JSON: " + e.getMessage(), e);
+        }
+        ctx.json(service.update(req));
     }
 }
